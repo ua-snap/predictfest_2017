@@ -1,22 +1,19 @@
 # PREDICTFEST
 
-def compute_interaction( tmp_fn, pr_fn, min_tmp, min_pr, begin_date=None, end_date=None ):
+def compute_interaction( tmp, pr, min_tmp, min_pr, time_dim='forecast_time0' ):
     ''' compute interactions between thresholds of the tmp2m and prate from CFSv2 '''
-    import xarray as xr
-    # setup and convert variable units
-    tmp = xr.open_mfdataset( tmp_fn )['TMP_P0_L103_GGA0'] - 273.15
-    pr = xr.open_mfdataset( pr_fn )['PRATE_P0_L1_GGA0'] * 86400
     
-    # sep = ds.sel( forecast_time0=slice(begin_date, end_date) )
-
+    # build an output array and fill it using threshold conditions
     out = np.zeros_like( tmp.data )
     out[ (tmp <= min_tmp) & (pr >= min_pr)] = 1
 
+    # mesh the lat/lons
     lons, lats = np.meshgrid(tmp['lon_0'].data, tmp['lat_0'].data)
-    time = tmp['forecast_time0'].to_index()
+    time = tmp[time_dim].to_index()
     time.name = 'time'
-    grouper = [ '{}-{}'.format(i.month, i.year) for i in tmp.forecast_time0.to_index() ]
+    grouper = [ '{}-{}'.format(i.month, i.year) for i in tmp[time_dim].to_index() ]
 
+    # build a new IN MEMORY NetCDF
     ds = xr.Dataset( {'derived':(['time','x', 'y'], out)},
                     coords={'lon': (['x', 'y'], lons),
                             'lat': (['x', 'y'], lats),
@@ -24,11 +21,29 @@ def compute_interaction( tmp_fn, pr_fn, min_tmp, min_pr, begin_date=None, end_da
                     attrs=tmp.attrs )
     return ds
 
+def wrap_compute_interaction( tmp, pr, min_tmp, min_pr ):
+    # READ IN DATA AND CONVERT UNITS
+    tmp = xr.open_mfdataset( tmp )['TMP_P0_L103_GGA0'] - 273.15
+    pr = xr.open_mfdataset( pr )['PRATE_P0_L1_GGA0'] * 86400
+    return compute_interaction( tmp, pr, min_tmp, min_pr )
+
+def transform_from_latlon(lat, lon):
+    lat = np.asarray(lat)
+    lon = np.asarray(lon)
+    trans = Affine.translation(lon[0], lat[0])
+    scale = Affine.scale(lon[1] - lon[0], lat[1] - lat[0])
+    return trans * scale
+    
+
 if __name__ == '__main__':
+    import os, glob
+    import matplotlib
+    matplotlib.use('agg')
+    from matplotlib import pyplot as plt
     import xarray as xr
     import numpy as np
-    import os, glob
     import pandas as pd
+    from affine import Affine
 
     base_path = '/atlas_scratch/malindgren/ML_DATA/PredictFEST/CFSv2_NetCDF'
     # base_path = '/atlas_scratch/malindgren/PredictFEST/CFSv2_NetCDF'
@@ -42,27 +57,67 @@ if __name__ == '__main__':
     begin_date = '09-01-1982'
     end_date = '09-30-1982'
 
-    # FILE PATHS 
-    # pr_paths = sorted( glob.glob( os.path.join( path_lookup['prate'], '*.nc') ))
-    pr_fn = os.path.join( path_lookup['prate'], '*.nc')
-    tmp_fn = os.path.join( path_lookup['tmp2m'], '*.nc')
+    # LIST FILES 
+    pr_files = sorted( glob.glob( os.path.join( path_lookup['prate'], '*.nc') ) )
+    tmp_files = sorted( glob.glob( os.path.join( path_lookup['tmp2m'], '*.nc') ) )
 
-    counts = compute_interaction( tmp_fn, pr_fn, min_tmp, min_pr, begin_date=None, end_date=None )
+    all_files = zip( tmp_files, pr_files )
+    hold = [ wrap_compute_interaction( tmp, pr, min_tmp, min_pr ) for tmp, pr in all_files ]
+    counts = [ ds.groupby('time.month').apply(lambda x: np.sum(x, axis=0)) for ds in hold ]
+    done = sum( counts ) / len(counts)
+    lons = hold[0].lon.data
+    lats = hold[0].lat.data
+    done.coords['lon'] = (('x', 'y'), lons)
+    done.coords['lat'] = (('x', 'y'), lats)
 
-    out = []
-    dates = []
-    for year, yr_grp in counts.groupby( 'time.year' ):
-        for month, mon_grp in yr_grp.groupby('time.month'):
-            dates.append( '{}-{}'.format(year, month) )
+    # # ANOTHER WAY TO COMPUTE THE SAME THING
+    # counts = wrap_compute_interaction( tmp_files, pr_files, min_tmp, min_pr )
 
-    new_times = [ pd.Timestamp(i) for i in dates ]
-    final = xr.concat( out, dim='time' )
-    final['time'] = pd.DatetimeIndex( new_times )
+    # out = []
+    # dates = []
+    # for year, yr_grp in counts.groupby( 'time.year' ):
+    #     for month, mon_grp in yr_grp.groupby('time.month'):
 
-    done = final.groupby('time.month').apply( lambda x: np.mean(x, axis=0))    
-    done.to_netcdf( os.path.join( base_path, 'outputs', 'nevents_climatology_cfsv2.nc'), format='NETCDF4' )
+    #         dates = dates + ['{}-{}'.format(year, month)]
+    #         out = out + [mon_grp.apply(lambda x: np.sum(x, axis=0))]
+
+    # new_times = [ pd.Timestamp(i) for i in dates ]
+    # final = xr.concat( out, dim='time' )
+    # final['time'] = pd.DatetimeIndex( new_times )
+
+    # done = final.groupby('time.month').mean( axis=0 )
+    # #END OTHE WAY TO DO IT
+
+    # CROP TO A BETTER DOMAIN FOR AK / CANADA 
+    cropped = done.where((done.lon > 150) & (done.lon < 270) & (done.lat > 35) & (done.lat < 80), drop=True)
+    cropped.to_netcdf( os.path.join( base_path, 'outputs', 'akcan_nevents_climatology_cfsv2.nc'), format='NETCDF4' )
 
 
+    # PLOT IT UP
+    cropped.derived.plot(x='lon', y='lat', col='month', col_wrap=3)
+    plt.savefig( os.path.join( base_path, 'outputs', 'akcan_nevents_climatology_cfsv2.png') )
+    plt.close()
+
+
+    # FAIRBANKS PIXEL EXTRACTION -- BBOLTON
+    # fbx = (64.8164, -147.8635) # greenwich
+    fbx = (212.1365, 64.8164) # pacific?
+
+    def get_closest_value_1d( arr, v ):
+        return arr[ (np.abs(arr - v)).argmin() ]
+
+    profile = cropped.where( (cropped.lon == get_closest_value_1d(cropped.lon.data.ravel(), 212.1365)) & (cropped.lat == get_closest_value_1d(cropped.lat.data.ravel(), 64.8164), drop=True) )
+    a = transform_from_latlon(np.unique(lats.data), np.unique(lons.data))
+    col, row = ~a * fbx
+
+    ind = np.where((cropped.lon == get_closest_value_1d(cropped.lon.data.ravel(), 212.1365)) & \
+                    (cropped.lat == get_closest_value_1d(cropped.lat.data.ravel(), 64.8164)))
+
+    fbx_derived = cropped.derived.data[ ..., int(ind[0]), int(ind[1])]
+
+
+
+# # # # WORK AREA REMOVE WHEN DONE
     # ds = xr.open_mfdataset( tmp_fn )
     # times = [ (i.year, i.month) for i in ds.forecast_time0 ]
 
@@ -73,8 +128,14 @@ if __name__ == '__main__':
     # # ds.coords['grouper'] = (('x', 'y'), lat)
 
     # month_counts = counts.groupby( 'time.month' ).apply(lambda x: np.sum(x, axis=0))
-    
 
+        # # READ IN DATA AND CONVERT UNITS
+    # tmp = xr.open_mfdataset( tmp_files )['TMP_P0_L103_GGA0'] - 273.15
+    # pr = xr.open_mfdataset( pr_files )['PRATE_P0_L1_GGA0'] * 86400
+
+    
+    # lat_slice = (75, 40)
+    # lon_slice = (0, 127)
 
     # # # OPEN THE HINDCAST DATA FILES:
     # # pr = xr.open_mfdataset( os.path.join( path_lookup['pr'], '*.nc'), auto_close=True )
