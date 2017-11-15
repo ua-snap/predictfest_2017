@@ -51,7 +51,7 @@ if __name__ == '__main__':
     path_lookup = { variable:os.path.join(base_path, 'hindcast', variable, '081418' ) for variable in variables }
 
     min_tmp = -1.1
-    min_pr_list = [0.254, 2.54, 7.62 ] # [,1,3] #inches
+    min_pr_list = [0.254, 2.54, 7.62, 12.7 ] # [,1,3,5] #inches
     # tmp_fn = '/workspace/Shared/Users/malindgren/predictfest/CFSv2_NetCDF/forecast/tmp2m/081500/tmp2m.01.2011081500.daily.nc'
     # pr_fn = '/workspace/Shared/Users/malindgren/predictfest/CFSv2_NetCDF/forecast/prate/081500/prate.01.2011081500.daily.nc'
     begin_date = '09-01-1982'
