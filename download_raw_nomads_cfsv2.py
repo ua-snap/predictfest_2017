@@ -40,6 +40,7 @@ members = ['00','06','12','18']
 for year in years:
 	for member in members:
 		# base urls to grab the same data for each year...
+		# ftp://nomads.ncdc.noaa.gov/CFSRR/cfsr-rfl-ts9 <-- this may work if other site is down...
 		base_url_prate = 'https://nomads.ncdc.noaa.gov/data/cfsr-rfl-ts9/prate/{}08/prate.{}0814'+member+'.time.grb2'
 		
 		base_url_tmp2m = 'https://nomads.ncdc.noaa.gov/data/cfsr-rfl-ts9/tmp2m/{}08/tmp2m.{}0814'+member+'.time.grb2'

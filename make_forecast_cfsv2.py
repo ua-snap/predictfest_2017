@@ -1,4 +1,7 @@
-# PREDICTFEST
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# PREDICTFEST -- 2017
+# make forecast counts for predicted years over the 9month period
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
 def compute_interaction( tmp, pr, min_tmp, min_pr, time_dim='forecast_time0' ):
     ''' compute interactions between thresholds of the tmp2m and prate from CFSv2 '''
@@ -44,147 +47,38 @@ if __name__ == '__main__':
     import numpy as np
     import pandas as pd
     from affine import Affine
+    import multiprocessing as mp
+    from functools import partial
 
-    base_path = '/atlas_scratch/malindgren/ML_DATA/PredictFEST/CFSv2_NetCDF'
-    # base_path = '/atlas_scratch/malindgren/PredictFEST/CFSv2_NetCDF'
+    base_path = '/workspace/Shared/Users/malindgren/predictfest/data/netcdf/cfsv2_forecast_ts_9mon'
     variables = [ 'tmp2m','prate' ]
-    path_lookup = { variable:os.path.join(base_path, 'hindcast', variable, '081418' ) for variable in variables }
+    starttime = '00'
+    begin = 2011
+    end = 2017
 
     min_tmp = -1.1
-    min_pr_list = [0.254, 2.54, 7.62, 12.7 ] # [,1,3,5] #inches
-    # tmp_fn = '/workspace/Shared/Users/malindgren/predictfest/CFSv2_NetCDF/forecast/tmp2m/081500/tmp2m.01.2011081500.daily.nc'
-    # pr_fn = '/workspace/Shared/Users/malindgren/predictfest/CFSv2_NetCDF/forecast/prate/081500/prate.01.2011081500.daily.nc'
-    begin_date = '09-01-1982'
-    end_date = '09-30-1982'
+    min_pr_list = [ 2.54, 7.62, 12.7 ] # [1,3,5] #inches threshold
 
-    # LIST FILES 
-    pr_files = sorted( glob.glob( os.path.join( path_lookup['prate'], '*.nc') ) )
-    tmp_files = sorted( glob.glob( os.path.join( path_lookup['tmp2m'], '*.nc') ) )
+    # LIST FILES -- [ORDER SHOULD BE TMP,PR]
+    tmp_files, pr_files = [sorted([ os.path.join(r,fn) for r,s,files in os.walk( base_path ) for fn in files if variable in fn and fn.endswith('.nc') and starttime+'.daily' in fn ]) for variable in variables ]
 
     all_files = list(zip( tmp_files, pr_files ))
 
     for min_pr in min_pr_list:
+        years = list( range( begin, end+1 ) )
         hold = [ wrap_compute_interaction( tmp, pr, min_tmp, min_pr ) for tmp, pr in all_files ]
         lons = hold[0].lon.data
         lats = hold[0].lat.data
         counts = [ ds.groupby('time.month').apply(lambda x: np.sum(x, axis=0)) for ds in hold ]
-
-        # variability metrics
-        stdev = [ ds.groupby('time.month').apply(lambda x: np.std(x, axis=0)) for ds in hold ]
-        ds = xr.concat(counts, dim='month')
-        stdev = ds.groupby('month').apply( np.std, axis=0 )
-        stdev.coords['lon'] = (('x', 'y'), lons)
-        stdev.coords['lat'] = (('x', 'y'), lats)
-
-        done = sum( counts ) / len(counts)
-        done.coords['lon'] = (('x', 'y'), lons)
-        done.coords['lat'] = (('x', 'y'), lats)
-
-        done.to_netcdf( os.path.join( base_path, 'outputs', 'global_nevents_climatology_cfsv2_{}.nc').format(str(min_pr).replace('.', '_')), format='NETCDF4' )
-        # # ANOTHER WAY TO COMPUTE THE SAME THING
-        # counts = wrap_compute_interaction( tmp_files, pr_files, min_tmp, min_pr )
-
-        # out = []
-        # dates = []
-        # for year, yr_grp in counts.groupby( 'time.year' ):
-        #     for month, mon_grp in yr_grp.groupby('time.month'):
-
-        #         dates = dates + ['{}-{}'.format(year, month)]
-        #         out = out + [mon_grp.apply(lambda x: np.sum(x, axis=0))]
-
-        # new_times = [ pd.Timestamp(i) for i in dates ]
-        # final = xr.concat( out, dim='time' )
-        # final['time'] = pd.DatetimeIndex( new_times )
-
-        # done = final.groupby('time.month').mean( axis=0 )
-        # #END OTHE WAY TO DO IT
-
-        # CROP TO A BETTER DOMAIN FOR AK / CANADA 
-        cropped = done.where((done.lon > 180) & (done.lon < 250) & (done.lat > 40) & (done.lat < 80), drop=True)
-        cropped.to_netcdf( os.path.join( base_path, 'outputs', 'akcan_nevents_climatology_cfsv2_{}.nc').format(str(min_pr).replace('.', '_')), format='NETCDF4' )
-
-
-        # PLOT IT UP
-        cropped.derived.plot(x='lon', y='lat', col='month', col_wrap=3)
-        plt.savefig( os.path.join( base_path, 'outputs', 'akcan_nevents_climatology_cfsv2_{}.png').format(str(min_pr).replace('.', '_')) )
-        plt.close()
-
-        # PLOT THE STDEV
-        stdev_cropped = stdev.where((stdev.lon > 180) & (stdev.lon < 250) & (stdev.lat > 40) & (stdev.lat < 80), drop=True)
-        stdev_cropped.derived.plot(x='lon', y='lat', col='month', col_wrap=3)
-        plt.savefig( os.path.join( base_path, 'outputs', 'akcan_stdev_nevents_climatology_cfsv2_{}.png').format(str(min_pr).replace('.', '_')) )
-        plt.close()
-
-
-
-    # FAIRBANKS PIXEL EXTRACTION -- BBOLTON
-    # fbx = (64.8164, -147.8635) # greenwich
-    fbx = (212.1365, 64.8164) # pacific?
-
-    def get_closest_value_1d( arr, v ):
-        return arr[ (np.abs(arr - v)).argmin() ]
-
-    profile = cropped.where( (cropped.lon == get_closest_value_1d(cropped.lon.data.ravel(), 212.1365)) & (cropped.lat == get_closest_value_1d(cropped.lat.data.ravel(), 64.8164), drop=True) )
-    a = transform_from_latlon(np.unique(lats.data), np.unique(lons.data))
-    col, row = ~a * fbx
-
-    ind = np.where((cropped.lon == get_closest_value_1d(cropped.lon.data.ravel(), 212.1365)) & \
-                    (cropped.lat == get_closest_value_1d(cropped.lat.data.ravel(), 64.8164)))
-
-    fbx_derived = cropped.derived.data[ ..., int(ind[0]), int(ind[1])]
-
-
-
-# # # # WORK AREA REMOVE WHEN DONE
-    # ds = xr.open_mfdataset( tmp_fn )
-    # times = [ (i.year, i.month) for i in ds.forecast_time0 ]
-
-    # # time = counts.time
-    # counts['grouper'] = (('time'), grouper)
-    # counts2 = counts.groupby( 'grouper' )
-
-    # # ds.coords['grouper'] = (('x', 'y'), lat)
-
-    # month_counts = counts.groupby( 'time.month' ).apply(lambda x: np.sum(x, axis=0))
-
-        # # READ IN DATA AND CONVERT UNITS
-    # tmp = xr.open_mfdataset( tmp_files )['TMP_P0_L103_GGA0'] - 273.15
-    # pr = xr.open_mfdataset( pr_files )['PRATE_P0_L1_GGA0'] * 86400
-
-    
-    # lat_slice = (75, 40)
-    # lon_slice = (0, 127)
-
-    # # # OPEN THE HINDCAST DATA FILES:
-    # # pr = xr.open_mfdataset( os.path.join( path_lookup['pr'], '*.nc'), auto_close=True )
-    # # tmp = xr.open_mfdataset( os.path.join( path_lookup['tmp'], '*.nc'), auto_close=True )
-
-
-    # # # RESAMPLE TO MONTHLIES
-    # # pr_mon = pr.resample( 'M', dim='forecast_time0', how='' )
-    # # tmp_mon = 
-
-    # # d1 = '/workspace/Shared/Users/malindgren/predictfest/CFSv2_NetCDF/hindcast/tmp2m/081400'
-    # # d2 = '/workspace/Shared/Users/malindgren/predictfest/CFSv2_NetCDF/forecast/tmp2m/081500'
-    # # years = [list(range(1982, 2010+1)), [2011, 2012]]
-
-    # # # grab the past files from the hindcast...
-    # # d1 = sorted( glob.glob( os.path.join(d1, '*.nc') ) )
-    # # d2 = sorted( glob.glob( os.path.join(d2, '*.nc') ) )
-    # # d2 = [ fn for fn in d2 if '2011' in fn or '2012' in fn ]
-    
-    # # all_files = d1+d2
-
-    # # hold = [ xr.open_dataset(fn, autoclose=True).isel()['TMP_P0_L103_GGA0'] for fn in all_files ]
-
-    # # temp_variable = 'TMP_P0_L103_GGA0'
-    # # precip_variable = 'PRATE_P0_L1_GGA0'
-
-
-    # # # Septembers:
-    # # min_temp = -1.11111
-    # # min_snow = 0.254 
-
-
-
-    # # how many snow event 
+        for year, ds in zip( years, counts ):
+            ds.coords['lon'] = (('x', 'y'), lons)
+            ds.coords['lat'] = (('x', 'y'), lats)
+            # crop to a reasonable extent
+            cropped = ds.where((ds.lon > 180) & (ds.lon < 250) & (ds.lat > 45) & (ds.lat < 80), drop=True)
+            out_fn = os.path.join( '/workspace/Shared/Users/malindgren/predictfest/data', 'outputs', 'cfsv2_forecast_ts_9mon', 'akcan_nevents_forecast_cfsv2_{}_{}_{}.nc').format(str(min_pr).replace('.', '_'), year, starttime ) 
+            dirname = os.path.dirname( out_fn )
+            if not os.path.exists(dirname):
+                os.makedirs(dirname)
+            cropped.to_netcdf( out_fn, format='NETCDF4' )
+            cropped.close()
+            del cropped
